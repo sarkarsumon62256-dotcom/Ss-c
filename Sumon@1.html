@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Premium Withdraw</title>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+    <style>
+        :root {
+            --primary: #6200ee;
+            --secondary: #03dac6;
+            --error: #b00020;
+            --success: #4caf50;
+            --bg: #f5f5f5;
+        }
+
+        body { 
+            font-family: 'Roboto', sans-serif; 
+            background: var(--bg); 
+            margin: 0; 
+            padding: 20px; 
+            display: flex; 
+            justify-content: center;
+            align-items: center;
+            min-height: 90vh;
+        }
+
+        .card { 
+            background: white; 
+            padding: 30px; 
+            border-radius: 20px; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1); 
+            width: 100%; 
+            max-width: 400px;
+            border-top: 5px solid var(--primary);
+        }
+
+        h2 { text-align: center; color: var(--primary); margin-top: 0; font-size: 24px; }
+        
+        .input-group { margin-bottom: 15px; }
+        
+        label { 
+            font-size: 12px; 
+            font-weight: bold; 
+            color: #777; 
+            text-transform: uppercase;
+            display: block;
+            margin-bottom: 5px;
+            margin-left: 5px;
+        }
+
+        input { 
+            width: 100%; 
+            padding: 14px; 
+            border: 2px solid #eee; 
+            border-radius: 12px; 
+            box-sizing: border-box; 
+            font-size: 16px; 
+            transition: 0.3s;
+            background: #fafafa;
+        }
+
+        input:focus { 
+            border-color: var(--primary); 
+            outline: none; 
+            background: #fff;
+        }
+
+        button { 
+            width: 100%; 
+            padding: 16px; 
+            background: var(--primary); 
+            color: white; 
+            border: none; 
+            border-radius: 12px; 
+            cursor: pointer; 
+            font-size: 16px; 
+            font-weight: bold; 
+            margin-top: 10px;
+            box-shadow: 0 4px 15px rgba(98, 0, 238, 0.3);
+            transition: 0.3s;
+        }
+
+        button:active { transform: scale(0.96); box-shadow: none; }
+        button:disabled { background: #ccc; box-shadow: none; }
+
+        /* Custom Alert Messages */
+        #status-box {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 12px;
+            text-align: center;
+            font-size: 14px;
+            display: none;
+            animation: slideIn 0.4s ease;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .err { background: #ffebee; color: var(--error); border: 1px solid #ffcdd2; }
+        .suc { background: #e8f5e9; color: var(--success); border: 1px solid #c8e6c9; }
+        .wait { background: #e3f2fd; color: #1565c0; border: 1px solid #bbdefb; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    
+    <div class="input-group">
+        <label>Verification ID</label>
+        <input type="text" id="uid" placeholder="Enter Video UID">
+    </div>
+
+    <div class="input-group">
+        <label>Coins Amount</label>
+        <input type="number" id="amount" placeholder="Min. 100 coins">
+    </div>
+
+    <div class="input-group">
+        <label>UPI Destination</label>
+        <input type="text" id="upi" placeholder="username@bank">
+    </div>
+
+    <button id="withdrawBtn" onclick="processWithdraw()"> Withdrawal</button>
+    
+    <div id="status-box"></div>
+</div>
+
+<script>
+    // Firebase Config
+    const firebaseConfig = { databaseURL: "https://ssss-4436e-default-rtdb.firebaseio.com/" };
+    if (!firebase.apps.length) { firebase.initializeApp(firebaseConfig); }
+    const db = firebase.database();
+
+    function notify(msg, type) {
+        const box = document.getElementById('status-box');
+        box.innerText = msg;
+        box.className = ''; 
+        box.classList.add(type);
+        box.style.display = 'block';
+    }
+
+    async function processWithdraw() {
+        const uid = document.getElementById('uid').value.trim();
+        const amt = parseInt(document.getElementById('amount').value);
+        const upi = document.getElementById('upi').value.trim();
+        const btn = document.getElementById('withdrawBtn');
+
+        if (!uid || !amt || !upi) {
+            notify("⚠️ Please complete all fields!", "err");
+            return;
+        }
+
+        // 24 Hour Logic
+        const lastT = localStorage.getItem('lock_' + uid) || 0;
+        if (Date.now() - lastT < 86400000) {
+            notify("⏳ Time Lock: Try again after 24 hours!", "err");
+            return;
+        }
+
+        btn.disabled = true;
+        btn.innerText = "Connecting...";
+        notify("🔍 Verifying your account...", "wait");
+
+        try {
+            const snap = await db.ref('users').orderByChild('uid').equalTo(uid).once('value');
+            
+            if (!snap.exists()) {
+                notify("❌ Invalid UID! User not found.", "err");
+                btn.disabled = false;
+                btn.innerText = "Request Withdrawal";
+                return;
+            }
+
+            const key = Object.keys(snap.val())[0];
+            const user = snap.val()[key];
+            const wallet = parseInt(user.coin || 0);
+
+            if (wallet < amt) {
+                notify(`❌ Low Balance! You have ${wallet} coins.`, "err");
+            } else {
+                // 1. Debit Coins
+                const newBal = wallet - amt;
+                await db.ref('users/' + key).update({ coin: newBal });
+
+                // 2. Log Request
+                await db.ref('sumon').push({
+                    uid: uid,
+                    name: user.user_name || "No Name",
+                    withdraw_amount: amt,
+                    upi: upi,
+                    old_bal: wallet,
+                    new_bal: newBal,
+                    time: new Date().toLocaleString(),
+                    status: "Pending"
+                });
+
+                localStorage.setItem('lock_' + uid, Date.now());
+                notify(`✅ Success! ${amt} coins debited. Request sent!`, "suc");
+                document.getElementById('amount').value = '';
+                document.getElementById('upi').value = '';
+            }
+        } catch (e) {
+            notify("🚨 Server Error: Check connection.", "err");
+        }
+
+        btn.disabled = false;
+        btn.innerText = "Request Withdrawal";
+    }
+</script>
+
+</body>
+</html>
